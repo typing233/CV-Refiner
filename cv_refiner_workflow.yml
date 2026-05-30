@@ -18,6 +18,8 @@ workflow:
         - .txt
         - .md
         - .pdf
+        - .doc
+        - .docx
       allowed_file_types:
         - document
       allowed_file_upload_methods:
@@ -31,9 +33,29 @@ workflow:
       - data:
           isInIteration: false
           sourceType: start
-          targetType: code
-        id: edge-start-to-validation
+          targetType: doc-extractor
+        id: edge-start-to-extractor
         source: start
+        sourceHandle: source
+        target: doc_extractor
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: doc-extractor
+          targetType: code
+        id: edge-extractor-to-merge
+        source: doc_extractor
+        sourceHandle: source
+        target: input_merge
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: code
+          targetType: code
+        id: edge-merge-to-validation
+        source: input_merge
         sourceHandle: source
         target: input_validation
         targetHandle: target
@@ -41,11 +63,31 @@ workflow:
       - data:
           isInIteration: false
           sourceType: code
-          targetType: llm
-        id: edge-validation-to-llm
+          targetType: if-else
+        id: edge-validation-to-branch
         source: input_validation
         sourceHandle: source
+        target: condition_branch
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: if-else
+          targetType: llm
+        id: edge-branch-true-to-llm
+        source: condition_branch
+        sourceHandle: "true"
         target: cv_analysis_llm
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: if-else
+          targetType: end
+        id: edge-branch-false-to-error
+        source: condition_branch
+        sourceHandle: "false"
+        target: error_end
         targetHandle: target
         type: custom
       - data:
@@ -68,28 +110,34 @@ workflow:
         target: end
         targetHandle: target
         type: custom
-      - data:
-          isInIteration: false
-          sourceType: code
-          targetType: end
-        id: edge-validation-error-to-end
-        source: input_validation
-        sourceHandle: source_1
-        target: error_end
-        targetHandle: target
-        type: custom
     nodes:
       - data:
           title: 开始
           type: start
           variables:
-            - label: 简历文本
+            - label: 简历文本（可选，粘贴输入）
               max_length: 20000
               options: []
-              required: true
+              required: false
               type: paragraph
               variable: resume_text
-        height: 90
+            - label: 简历文件（可选，上传 txt/md/pdf/docx）
+              allowed_file_extensions:
+                - .txt
+                - .md
+                - .pdf
+                - .doc
+                - .docx
+              allowed_file_types:
+                - document
+              allowed_file_upload_methods:
+                - local_file
+                - remote_url
+              max_length: 1
+              required: false
+              type: file
+              variable: resume_file
+        height: 118
         id: start
         position:
           x: 80
@@ -101,22 +149,83 @@ workflow:
         width: 244
 
       - data:
+          doc_extractor_config:
+            is_array: false
+          title: 文档提取
+          type: doc-extractor
+          variables:
+            - value_selector:
+                - start
+                - resume_file
+              variable: file
+        height: 90
+        id: doc_extractor
+        position:
+          x: 384
+          y: 282
+        positionAbsolute:
+          x: 384
+          y: 282
+        type: custom
+        width: 244
+
+      - data:
+          code: |
+            def main(pasted_text: str, extracted_text: str) -> dict:
+                """合并粘贴文本和文件提取文本，优先使用文件内容"""
+                # 优先使用上传文件提取的内容
+                if extracted_text and extracted_text.strip():
+                    return {"resume_text": extracted_text.strip()}
+
+                # 其次使用粘贴输入的文本
+                if pasted_text and pasted_text.strip():
+                    return {"resume_text": pasted_text.strip()}
+
+                # 两者都为空
+                return {"resume_text": ""}
+          code_language: python3
+          dependencies: []
+          outputs:
+            resume_text:
+              children: null
+              type: string
+          title: 输入合并
+          type: code
+          variables:
+            - value_selector:
+                - start
+                - resume_text
+              variable: pasted_text
+            - value_selector:
+                - doc_extractor
+                - text
+              variable: extracted_text
+        height: 102
+        id: input_merge
+        position:
+          x: 688
+          y: 282
+        positionAbsolute:
+          x: 688
+          y: 282
+        type: custom
+        width: 244
+
+      - data:
           code: |
             import re
 
             def main(resume_text: str) -> dict:
                 """校验简历输入的合法性"""
-                # 检查是否为空或仅包含空白字符
                 if not resume_text or not resume_text.strip():
                     return {
                         "valid": False,
-                        "error_message": "错误：简历内容为空，请粘贴或上传您的简历文本。",
+                        "error_message": "错误：简历内容为空。请粘贴简历文本，或上传简历文件（支持 txt/md/pdf/docx）。",
                         "validated_text": ""
                     }
 
                 cleaned_text = resume_text.strip()
 
-                # 检查最小长度
                 if len(cleaned_text) < 100:
                     return {
                         "valid": False,
@@ -124,7 +233,6 @@ workflow:
                         "validated_text": ""
                     }
 
-                # 检查最大长度
                 if len(cleaned_text) > 20000:
                     return {
                         "valid": False,
@@ -132,7 +240,6 @@ workflow:
                         "validated_text": ""
                     }
 
-                # 检查是否包含有意义的文本（至少包含中文或英文字母）
                 has_chinese = bool(re.search(r'[一-鿿]', cleaned_text))
                 has_english = bool(re.search(r'[a-zA-Z]', cleaned_text))
                 if not has_chinese and not has_english:
@@ -142,7 +249,6 @@ workflow:
                         "validated_text": ""
                     }
 
-                # 基本结构检测：检查是否包含常见简历关键词
                 resume_keywords_zh = ['教育', '经历', '工作', '项目', '技能', '学历', '经验', '职责', '公司', '大学']
                 resume_keywords_en = ['education', 'experience', 'work', 'project', 'skill', 'university', 'company', 'responsibility']
 
@@ -180,16 +286,38 @@ workflow:
           type: code
           variables:
             - value_selector:
-                - start
+                - input_merge
                 - resume_text
               variable: resume_text
         height: 102
         id: input_validation
         position:
-          x: 384
+          x: 992
           y: 282
         positionAbsolute:
-          x: 384
+          x: 992
+          y: 282
+        type: custom
+        width: 244
+
+      - data:
+          conditions:
+            - comparison_operator: is
+              id: condition-valid-true
+              value: "true"
+              variable_selector:
+                - input_validation
+                - valid
+          logical_operator: and
+          title: 校验通过？
+          type: if-else
+        height: 126
+        id: condition_branch
+        position:
+          x: 1296
+          y: 282
+        positionAbsolute:
+          x: 1296
           y: 282
         type: custom
         width: 244
@@ -309,11 +437,11 @@ workflow:
         height: 98
         id: cv_analysis_llm
         position:
-          x: 688
-          y: 282
+          x: 1600
+          y: 182
         positionAbsolute:
-          x: 688
-          y: 282
+          x: 1600
+          y: 182
         type: custom
         width: 244
 
@@ -325,13 +453,10 @@ workflow:
             def main(llm_output: str) -> dict:
                 """将 LLM 的 JSON 输出格式化为 Markdown 报告"""
 
-                # 尝试从 LLM 输出中提取 JSON
                 json_data = None
                 try:
-                    # 尝试直接解析
                     json_data = json.loads(llm_output)
                 except json.JSONDecodeError:
-                    # 尝试从 markdown code block 中提取
                     json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', llm_output)
                     if json_match:
                         try:
@@ -340,25 +465,19 @@ workflow:
                             pass
 
                 if not json_data:
-                    # 降级处理：无法解析 JSON 时直接返回原始输出
                     report = "# 📄 简历评估报告\n\n"
                     report += "> ⚠️ 评估结果格式解析异常，以下为原始评估内容：\n\n"
                     report += llm_output
                     return {"report": report}
 
-                # 构建 Markdown 报告
                 report = "# 📄 简历评估报告\n\n"
 
-                # 总评分
                 overall_score = json_data.get("overall_score", "N/A")
                 score_emoji = get_score_emoji(overall_score)
                 report += f"## {score_emoji} 综合评分：{overall_score}/100\n\n"
-
-                # 评分等级说明
                 report += f"**评价等级：{get_score_level(overall_score)}**\n\n"
                 report += "---\n\n"
 
-                # 各维度评分
                 report += "## 📊 各维度评分\n\n"
                 report += "| 维度 | 评分 | 状态 | 总结 |\n"
                 report += "|------|------|------|------|\n"
@@ -381,7 +500,6 @@ workflow:
 
                 report += "\n---\n\n"
 
-                # 优点
                 strengths = json_data.get("strengths", [])
                 if strengths:
                     report += "## ✅ 简历优点\n\n"
@@ -389,12 +507,10 @@ workflow:
                         report += f"- {s}\n"
                     report += "\n---\n\n"
 
-                # 问题清单
                 issues = json_data.get("issues", [])
                 if issues:
                     report += "## ⚠️ 问题清单\n\n"
 
-                    # 按严重程度排序
                     severity_order = {"high": 0, "medium": 1, "low": 2}
                     sorted_issues = sorted(issues, key=lambda x: severity_order.get(x.get("severity", "low"), 3))
 
@@ -416,7 +532,6 @@ workflow:
 
                     report += "---\n\n"
 
-                # 优先行动项
                 priority_actions = json_data.get("priority_actions", [])
                 if priority_actions:
                     report += "## 🎯 优先修改事项\n\n"
@@ -424,7 +539,6 @@ workflow:
                         report += f"{i}. {action}\n"
                     report += "\n---\n\n"
 
-                # 页脚
                 report += "*本报告由 CV-Refiner 自动生成，建议结合具体岗位需求进一步调整简历内容。*\n"
 
                 return {"report": report}
@@ -489,11 +603,11 @@ workflow:
         height: 102
         id: report_formatter
         position:
-          x: 992
-          y: 282
+          x: 1904
+          y: 182
         positionAbsolute:
-          x: 992
-          y: 282
+          x: 1904
+          y: 182
         type: custom
         width: 244
 
@@ -508,11 +622,11 @@ workflow:
         height: 90
         id: end
         position:
-          x: 1296
-          y: 282
+          x: 2208
+          y: 182
         positionAbsolute:
-          x: 1296
-          y: 282
+          x: 2208
+          y: 182
         type: custom
         width: 244
 
@@ -527,15 +641,15 @@ workflow:
         height: 90
         id: error_end
         position:
-          x: 688
-          y: 482
+          x: 1600
+          y: 432
         positionAbsolute:
-          x: 688
-          y: 482
+          x: 1600
+          y: 432
         type: custom
         width: 244
 
     viewport:
       x: 0
       y: 0
-      zoom: 1
+      zoom: 0.8
