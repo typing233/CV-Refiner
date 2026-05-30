@@ -30,16 +30,43 @@ workflow:
       number_limits: 1
   graph:
     edges:
+      # Start → 文件判断
       - data:
           isInIteration: false
           sourceType: start
-          targetType: doc-extractor
-        id: edge-start-to-extractor
+          targetType: if-else
+        id: edge-start-to-file-check
         source: start
         sourceHandle: source
+        target: file_check
+        targetHandle: target
+        type: custom
+
+      # 文件判断 → true → 文档提取
+      - data:
+          isInIteration: false
+          sourceType: if-else
+          targetType: doc-extractor
+        id: edge-file-check-true-to-extractor
+        source: file_check
+        sourceHandle: "true"
         target: doc_extractor
         targetHandle: target
         type: custom
+
+      # 文件判断 → false → 仅文本透传
+      - data:
+          isInIteration: false
+          sourceType: if-else
+          targetType: code
+        id: edge-file-check-false-to-passthrough
+        source: file_check
+        sourceHandle: "false"
+        target: text_passthrough
+        targetHandle: target
+        type: custom
+
+      # 文档提取 → 输入合并
       - data:
           isInIteration: false
           sourceType: doc-extractor
@@ -50,6 +77,8 @@ workflow:
         target: input_merge
         targetHandle: target
         type: custom
+
+      # 输入合并 → 输入校验
       - data:
           isInIteration: false
           sourceType: code
@@ -60,6 +89,20 @@ workflow:
         target: input_validation
         targetHandle: target
         type: custom
+
+      # 仅文本透传 → 输入校验
+      - data:
+          isInIteration: false
+          sourceType: code
+          targetType: code
+        id: edge-passthrough-to-validation
+        source: text_passthrough
+        sourceHandle: source
+        target: input_validation
+        targetHandle: target
+        type: custom
+
+      # 输入校验 → 校验通过？
       - data:
           isInIteration: false
           sourceType: code
@@ -70,6 +113,8 @@ workflow:
         target: condition_branch
         targetHandle: target
         type: custom
+
+      # 校验通过 → LLM
       - data:
           isInIteration: false
           sourceType: if-else
@@ -80,6 +125,8 @@ workflow:
         target: cv_analysis_llm
         targetHandle: target
         type: custom
+
+      # 校验失败 → 错误输出
       - data:
           isInIteration: false
           sourceType: if-else
@@ -90,6 +137,8 @@ workflow:
         target: error_end
         targetHandle: target
         type: custom
+
+      # LLM → 报告格式化
       - data:
           isInIteration: false
           sourceType: llm
@@ -100,6 +149,8 @@ workflow:
         target: report_formatter
         targetHandle: target
         type: custom
+
+      # 报告格式化 → 输出报告
       - data:
           isInIteration: false
           sourceType: code
@@ -110,18 +161,20 @@ workflow:
         target: end
         targetHandle: target
         type: custom
+
     nodes:
+      # ========== 开始节点 ==========
       - data:
           title: 开始
           type: start
           variables:
-            - label: 简历文本（可选，粘贴输入）
+            - label: 简历文本（粘贴输入，与文件二选一）
               max_length: 20000
               options: []
               required: false
               type: paragraph
               variable: resume_text
-            - label: 简历文件（可选，上传 txt/md/pdf/docx）
+            - label: 简历文件（上传 txt/md/pdf/docx，与文本二选一）
               allowed_file_extensions:
                 - .txt
                 - .md
@@ -148,6 +201,30 @@ workflow:
         type: custom
         width: 244
 
+      # ========== 文件判断（IF/ELSE）==========
+      - data:
+          conditions:
+            - comparison_operator: is_not
+              id: condition-file-exists
+              value: ""
+              variable_selector:
+                - start
+                - resume_file
+          logical_operator: and
+          title: 有上传文件？
+          type: if-else
+        height: 126
+        id: file_check
+        position:
+          x: 384
+          y: 282
+        positionAbsolute:
+          x: 384
+          y: 282
+        type: custom
+        width: 244
+
+      # ========== 文档提取（有文件时走这条路）==========
       - data:
           doc_extractor_config:
             is_array: false
@@ -161,27 +238,23 @@ workflow:
         height: 90
         id: doc_extractor
         position:
-          x: 384
-          y: 282
+          x: 688
+          y: 182
         positionAbsolute:
-          x: 384
-          y: 282
+          x: 688
+          y: 182
         type: custom
         width: 244
 
+      # ========== 输入合并（文件提取后，与粘贴文本合并取优先）==========
       - data:
           code: |
             def main(pasted_text: str, extracted_text: str) -> dict:
                 """合并粘贴文本和文件提取文本，优先使用文件内容"""
-                # 优先使用上传文件提取的内容
                 if extracted_text and extracted_text.strip():
                     return {"resume_text": extracted_text.strip()}
-
-                # 其次使用粘贴输入的文本
                 if pasted_text and pasted_text.strip():
                     return {"resume_text": pasted_text.strip()}
-
-                # 两者都为空
                 return {"resume_text": ""}
           code_language: python3
           dependencies: []
@@ -203,45 +276,83 @@ workflow:
         height: 102
         id: input_merge
         position:
-          x: 688
-          y: 282
+          x: 992
+          y: 182
         positionAbsolute:
-          x: 688
-          y: 282
+          x: 992
+          y: 182
         type: custom
         width: 244
 
+      # ========== 仅文本透传（无文件时走这条路）==========
+      - data:
+          code: |
+            def main(pasted_text: str) -> dict:
+                """无文件上传时，直接透传粘贴文本"""
+                if pasted_text and pasted_text.strip():
+                    return {"resume_text": pasted_text.strip()}
+                return {"resume_text": ""}
+          code_language: python3
+          dependencies: []
+          outputs:
+            resume_text:
+              children: null
+              type: string
+          title: 仅文本透传
+          type: code
+          variables:
+            - value_selector:
+                - start
+                - resume_text
+              variable: pasted_text
+        height: 102
+        id: text_passthrough
+        position:
+          x: 688
+          y: 402
+        positionAbsolute:
+          x: 688
+          y: 402
+        type: custom
+        width: 244
+
+      # ========== 输入校验 ==========
       - data:
           code: |
             import re
 
-            def main(resume_text: str) -> dict:
-                """校验简历输入的合法性"""
-                if not resume_text or not resume_text.strip():
+            def main(from_file_branch: str, from_text_branch: str) -> dict:
+                """校验简历输入的合法性。接收两条分支的输入，取非空值。"""
+                # 从两条分支中取到实际内容（只有一条分支会有值）
+                resume_text = ""
+                if from_file_branch and from_file_branch.strip():
+                    resume_text = from_file_branch.strip()
+                elif from_text_branch and from_text_branch.strip():
+                    resume_text = from_text_branch.strip()
+
+                if not resume_text:
                     return {
                         "valid": False,
                         "error_message": "错误：简历内容为空。请粘贴简历文本，或上传简历文件（支持 txt/md/pdf/docx）。",
                         "validated_text": ""
                     }
 
-                cleaned_text = resume_text.strip()
-
-                if len(cleaned_text) < 100:
+                if len(resume_text) < 100:
                     return {
                         "valid": False,
                         "error_message": "错误：简历内容过短（少于100字符），请确保提供完整的简历内容。",
                         "validated_text": ""
                     }
 
-                if len(cleaned_text) > 20000:
+                if len(resume_text) > 20000:
                     return {
                         "valid": False,
                         "error_message": "错误：简历内容过长（超过20000字符），请精简后重新提交。",
                         "validated_text": ""
                     }
 
-                has_chinese = bool(re.search(r'[一-鿿]', cleaned_text))
-                has_english = bool(re.search(r'[a-zA-Z]', cleaned_text))
+                has_chinese = bool(re.search(r'[一-鿿]', resume_text))
+                has_english = bool(re.search(r'[a-zA-Z]', resume_text))
                 if not has_chinese and not has_english:
                     return {
                         "valid": False,
@@ -252,9 +363,9 @@ workflow:
                 resume_keywords_zh = ['教育', '经历', '工作', '项目', '技能', '学历', '经验', '职责', '公司', '大学']
                 resume_keywords_en = ['education', 'experience', 'work', 'project', 'skill', 'university', 'company', 'responsibility']
 
-                text_lower = cleaned_text.lower()
+                text_lower = resume_text.lower()
                 has_resume_structure = (
-                    any(kw in cleaned_text for kw in resume_keywords_zh) or
+                    any(kw in resume_text for kw in resume_keywords_zh) or
                     any(kw in text_lower for kw in resume_keywords_en)
                 )
 
@@ -268,7 +379,7 @@ workflow:
                 return {
                     "valid": True,
                     "error_message": "",
-                    "validated_text": cleaned_text
+                    "validated_text": resume_text
                 }
           code_language: python3
           dependencies: []
@@ -288,18 +399,23 @@ workflow:
             - value_selector:
                 - input_merge
                 - resume_text
-              variable: resume_text
+              variable: from_file_branch
+            - value_selector:
+                - text_passthrough
+                - resume_text
+              variable: from_text_branch
         height: 102
         id: input_validation
         position:
-          x: 992
+          x: 1296
           y: 282
         positionAbsolute:
-          x: 992
+          x: 1296
           y: 282
         type: custom
         width: 244
 
+      # ========== 校验通过？（IF/ELSE）==========
       - data:
           conditions:
             - comparison_operator: is
@@ -314,14 +430,15 @@ workflow:
         height: 126
         id: condition_branch
         position:
-          x: 1296
+          x: 1600
           y: 282
         positionAbsolute:
-          x: 1296
+          x: 1600
           y: 282
         type: custom
         width: 244
 
+      # ========== 简历评估分析（LLM）==========
       - data:
           context:
             enabled: false
@@ -437,14 +554,15 @@ workflow:
         height: 98
         id: cv_analysis_llm
         position:
-          x: 1600
+          x: 1904
           y: 182
         positionAbsolute:
-          x: 1600
+          x: 1904
           y: 182
         type: custom
         width: 244
 
+      # ========== 报告格式化 ==========
       - data:
           code: |
             import json
@@ -603,14 +721,15 @@ workflow:
         height: 102
         id: report_formatter
         position:
-          x: 1904
+          x: 2208
           y: 182
         positionAbsolute:
-          x: 1904
+          x: 2208
           y: 182
         type: custom
         width: 244
 
+      # ========== 输出报告 ==========
       - data:
           outputs:
             - value_selector:
@@ -622,14 +741,15 @@ workflow:
         height: 90
         id: end
         position:
-          x: 2208
+          x: 2512
           y: 182
         positionAbsolute:
-          x: 2208
+          x: 2512
           y: 182
         type: custom
         width: 244
 
+      # ========== 错误输出 ==========
       - data:
           outputs:
             - value_selector:
@@ -641,10 +761,10 @@ workflow:
         height: 90
         id: error_end
         position:
-          x: 1600
+          x: 1904
           y: 432
         positionAbsolute:
-          x: 1600
+          x: 1904
           y: 432
         type: custom
         width: 244
@@ -652,4 +772,4 @@ workflow:
     viewport:
       x: 0
       y: 0
-      zoom: 0.8
+      zoom: 0.7
