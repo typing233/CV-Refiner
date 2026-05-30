@@ -1,0 +1,541 @@
+app:
+  description: "简历评估工作流：从结构完整性、语言表达、关键词匹配、量化成果、冗余内容等维度对简历进行评估，输出结构化 Markdown 评估报告。"
+  icon: "📄"
+  icon_background: "#E4FBCC"
+  mode: workflow
+  name: "CV-Refiner 简历评估"
+  use_icon_as_answer_icon: true
+
+kind: app
+version: 0.1.2
+
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      allowed_file_extensions:
+        - .txt
+        - .md
+        - .pdf
+      allowed_file_types:
+        - document
+      allowed_file_upload_methods:
+        - local_file
+        - remote_url
+      enabled: true
+      max_file_size: 10
+      number_limits: 1
+  graph:
+    edges:
+      - data:
+          isInIteration: false
+          sourceType: start
+          targetType: code
+        id: edge-start-to-validation
+        source: start
+        sourceHandle: source
+        target: input_validation
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: code
+          targetType: llm
+        id: edge-validation-to-llm
+        source: input_validation
+        sourceHandle: source
+        target: cv_analysis_llm
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: llm
+          targetType: code
+        id: edge-llm-to-formatter
+        source: cv_analysis_llm
+        sourceHandle: source
+        target: report_formatter
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: code
+          targetType: end
+        id: edge-formatter-to-end
+        source: report_formatter
+        sourceHandle: source
+        target: end
+        targetHandle: target
+        type: custom
+      - data:
+          isInIteration: false
+          sourceType: code
+          targetType: end
+        id: edge-validation-error-to-end
+        source: input_validation
+        sourceHandle: source_1
+        target: error_end
+        targetHandle: target
+        type: custom
+    nodes:
+      - data:
+          title: 开始
+          type: start
+          variables:
+            - label: 简历文本
+              max_length: 20000
+              options: []
+              required: true
+              type: paragraph
+              variable: resume_text
+        height: 90
+        id: start
+        position:
+          x: 80
+          y: 282
+        positionAbsolute:
+          x: 80
+          y: 282
+        type: custom
+        width: 244
+
+      - data:
+          code: |
+            import re
+
+            def main(resume_text: str) -> dict:
+                """校验简历输入的合法性"""
+                # 检查是否为空或仅包含空白字符
+                if not resume_text or not resume_text.strip():
+                    return {
+                        "valid": False,
+                        "error_message": "错误：简历内容为空，请粘贴或上传您的简历文本。",
+                        "validated_text": ""
+                    }
+
+                cleaned_text = resume_text.strip()
+
+                # 检查最小长度
+                if len(cleaned_text) < 100:
+                    return {
+                        "valid": False,
+                        "error_message": "错误：简历内容过短（少于100字符），请确保提供完整的简历内容。",
+                        "validated_text": ""
+                    }
+
+                # 检查最大长度
+                if len(cleaned_text) > 20000:
+                    return {
+                        "valid": False,
+                        "error_message": "错误：简历内容过长（超过20000字符），请精简后重新提交。",
+                        "validated_text": ""
+                    }
+
+                # 检查是否包含有意义的文本（至少包含中文或英文字母）
+                has_chinese = bool(re.search(r'[一-鿿]', cleaned_text))
+                has_english = bool(re.search(r'[a-zA-Z]', cleaned_text))
+                if not has_chinese and not has_english:
+                    return {
+                        "valid": False,
+                        "error_message": "错误：未检测到有效的中文或英文文本内容，请确认上传内容是否正确。",
+                        "validated_text": ""
+                    }
+
+                # 基本结构检测：检查是否包含常见简历关键词
+                resume_keywords_zh = ['教育', '经历', '工作', '项目', '技能', '学历', '经验', '职责', '公司', '大学']
+                resume_keywords_en = ['education', 'experience', 'work', 'project', 'skill', 'university', 'company', 'responsibility']
+
+                text_lower = cleaned_text.lower()
+                has_resume_structure = (
+                    any(kw in cleaned_text for kw in resume_keywords_zh) or
+                    any(kw in text_lower for kw in resume_keywords_en)
+                )
+
+                if not has_resume_structure:
+                    return {
+                        "valid": False,
+                        "error_message": "警告：输入文本不像是一份简历（缺少教育、工作经历等关键信息），请确认输入内容。",
+                        "validated_text": ""
+                    }
+
+                return {
+                    "valid": True,
+                    "error_message": "",
+                    "validated_text": cleaned_text
+                }
+          code_language: python3
+          dependencies: []
+          outputs:
+            error_message:
+              children: null
+              type: string
+            valid:
+              children: null
+              type: bool
+            validated_text:
+              children: null
+              type: string
+          title: 输入校验
+          type: code
+          variables:
+            - value_selector:
+                - start
+                - resume_text
+              variable: resume_text
+        height: 102
+        id: input_validation
+        position:
+          x: 384
+          y: 282
+        positionAbsolute:
+          x: 384
+          y: 282
+        type: custom
+        width: 244
+
+      - data:
+          context:
+            enabled: false
+            variable_selector: []
+          model:
+            completion_params:
+              max_tokens: 4096
+              temperature: 0.3
+              top_p: 0.9
+            mode: chat
+            name: gpt-4o
+            provider: openai
+          prompt_template:
+            - id: system-prompt
+              role: system
+              text: |
+                你是一位专业的简历评估顾问，拥有多年人力资源和招聘经验。你的任务是从以下五个维度对简历进行全面评估：
+
+                ## 评估维度
+
+                ### 1. 结构完整性 (structure)
+                评估简历是否包含以下核心模块：
+                - 个人信息（姓名、联系方式）
+                - 教育背景
+                - 工作/实习经历
+                - 项目经验
+                - 专业技能
+                - 其他加分项（证书、获奖、志愿活动等）
+
+                ### 2. 语言表达 (language)
+                评估：
+                - 是否使用专业、简洁的表述
+                - 有无语法错误或错别字
+                - 动词使用是否有力（如"主导"、"推动"、"实现"）
+                - 语气是否一致且正式
+
+                ### 3. 关键词覆盖 (keywords)
+                评估：
+                - 是否包含行业通用术语和技能关键词
+                - 技术栈描述是否具体明确
+                - 是否缺少该领域常见的核心能力描述
+
+                ### 4. 量化成果 (quantification)
+                评估：
+                - 工作成果是否有数据支撑（百分比、金额、人数、时间等）
+                - 描述是否具体可衡量
+                - 哪些描述可以补充量化数据
+
+                ### 5. 冗余内容 (redundancy)
+                评估：
+                - 是否包含与求职无关的信息
+                - 是否有重复表述
+                - 描述是否过长，可以精简
+                - 是否包含过时或不相关的经历
+
+                ## 输出要求
+
+                请以严格的 JSON 格式输出评估结果，结构如下：
+
+                ```json
+                {
+                  "overall_score": 75,
+                  "dimension_scores": {
+                    "structure": {"score": 80, "summary": "一句话总结"},
+                    "language": {"score": 70, "summary": "一句话总结"},
+                    "keywords": {"score": 75, "summary": "一句话总结"},
+                    "quantification": {"score": 60, "summary": "一句话总结"},
+                    "redundancy": {"score": 85, "summary": "一句话总结"}
+                  },
+                  "issues": [
+                    {
+                      "id": 1,
+                      "dimension": "structure|language|keywords|quantification|redundancy",
+                      "severity": "high|medium|low",
+                      "description": "具体问题描述",
+                      "negative_impact": "对求职的具体负面影响",
+                      "suggestion": "具体的修改建议",
+                      "example": "如有可能，给出修改前后的对比示例"
+                    }
+                  ],
+                  "strengths": ["简历的优点1", "简历的优点2"],
+                  "priority_actions": ["最优先要做的修改1", "最优先要做的修改2", "最优先要做的修改3"]
+                }
+                ```
+
+                ## 评分标准
+                - 90-100: 优秀，几乎无需修改
+                - 75-89: 良好，有小幅优化空间
+                - 60-74: 一般，存在明显不足
+                - 40-59: 较差，需要大幅修改
+                - 0-39: 很差，建议重写
+
+                ## 注意事项
+                - 每个维度至少指出1个问题（如果存在）
+                - 严重程度(severity): high=严重影响求职成功率, medium=有一定影响, low=锦上添花的优化
+                - 修改建议必须具体可操作，不能是泛泛而谈
+                - 只输出 JSON，不要输出其他内容
+            - id: user-prompt
+              role: user
+              text: |
+                请对以下简历进行全面评估：
+
+                ---
+                {{#input_validation.validated_text#}}
+                ---
+          title: 简历评估分析
+          type: llm
+          variables: []
+          vision:
+            configs:
+              detail: high
+            enabled: false
+        height: 98
+        id: cv_analysis_llm
+        position:
+          x: 688
+          y: 282
+        positionAbsolute:
+          x: 688
+          y: 282
+        type: custom
+        width: 244
+
+      - data:
+          code: |
+            import json
+            import re
+
+            def main(llm_output: str) -> dict:
+                """将 LLM 的 JSON 输出格式化为 Markdown 报告"""
+
+                # 尝试从 LLM 输出中提取 JSON
+                json_data = None
+                try:
+                    # 尝试直接解析
+                    json_data = json.loads(llm_output)
+                except json.JSONDecodeError:
+                    # 尝试从 markdown code block 中提取
+                    json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', llm_output)
+                    if json_match:
+                        try:
+                            json_data = json.loads(json_match.group(1))
+                        except json.JSONDecodeError:
+                            pass
+
+                if not json_data:
+                    # 降级处理：无法解析 JSON 时直接返回原始输出
+                    report = "# 📄 简历评估报告\n\n"
+                    report += "> ⚠️ 评估结果格式解析异常，以下为原始评估内容：\n\n"
+                    report += llm_output
+                    return {"report": report}
+
+                # 构建 Markdown 报告
+                report = "# 📄 简历评估报告\n\n"
+
+                # 总评分
+                overall_score = json_data.get("overall_score", "N/A")
+                score_emoji = get_score_emoji(overall_score)
+                report += f"## {score_emoji} 综合评分：{overall_score}/100\n\n"
+
+                # 评分等级说明
+                report += f"**评价等级：{get_score_level(overall_score)}**\n\n"
+                report += "---\n\n"
+
+                # 各维度评分
+                report += "## 📊 各维度评分\n\n"
+                report += "| 维度 | 评分 | 状态 | 总结 |\n"
+                report += "|------|------|------|------|\n"
+
+                dimension_names = {
+                    "structure": "结构完整性",
+                    "language": "语言表达",
+                    "keywords": "关键词覆盖",
+                    "quantification": "量化成果",
+                    "redundancy": "冗余内容"
+                }
+
+                dimension_scores = json_data.get("dimension_scores", {})
+                for key, name in dimension_names.items():
+                    dim = dimension_scores.get(key, {})
+                    score = dim.get("score", "N/A")
+                    summary = dim.get("summary", "-")
+                    status = get_score_bar(score)
+                    report += f"| {name} | {score}/100 | {status} | {summary} |\n"
+
+                report += "\n---\n\n"
+
+                # 优点
+                strengths = json_data.get("strengths", [])
+                if strengths:
+                    report += "## ✅ 简历优点\n\n"
+                    for s in strengths:
+                        report += f"- {s}\n"
+                    report += "\n---\n\n"
+
+                # 问题清单
+                issues = json_data.get("issues", [])
+                if issues:
+                    report += "## ⚠️ 问题清单\n\n"
+
+                    # 按严重程度排序
+                    severity_order = {"high": 0, "medium": 1, "low": 2}
+                    sorted_issues = sorted(issues, key=lambda x: severity_order.get(x.get("severity", "low"), 3))
+
+                    for issue in sorted_issues:
+                        severity = issue.get("severity", "medium")
+                        severity_label = {"high": "🔴 严重", "medium": "🟡 中等", "low": "🟢 轻微"}.get(severity, "⚪ 未知")
+                        dimension = dimension_names.get(issue.get("dimension", ""), issue.get("dimension", "未知"))
+
+                        report += f"### [{severity_label}] {issue.get('description', '未描述')}\n\n"
+                        report += f"- **所属维度：** {dimension}\n"
+                        report += f"- **负面影响：** {issue.get('negative_impact', '未说明')}\n"
+                        report += f"- **修改建议：** {issue.get('suggestion', '未提供')}\n"
+
+                        example = issue.get("example", "")
+                        if example:
+                            report += f"- **修改示例：** {example}\n"
+
+                        report += "\n"
+
+                    report += "---\n\n"
+
+                # 优先行动项
+                priority_actions = json_data.get("priority_actions", [])
+                if priority_actions:
+                    report += "## 🎯 优先修改事项\n\n"
+                    for i, action in enumerate(priority_actions, 1):
+                        report += f"{i}. {action}\n"
+                    report += "\n---\n\n"
+
+                # 页脚
+                report += "*本报告由 CV-Refiner 自动生成，建议结合具体岗位需求进一步调整简历内容。*\n"
+
+                return {"report": report}
+
+
+            def get_score_emoji(score):
+                if not isinstance(score, (int, float)):
+                    return "📋"
+                if score >= 90:
+                    return "🌟"
+                elif score >= 75:
+                    return "👍"
+                elif score >= 60:
+                    return "📝"
+                elif score >= 40:
+                    return "⚡"
+                else:
+                    return "🚨"
+
+
+            def get_score_level(score):
+                if not isinstance(score, (int, float)):
+                    return "无法评定"
+                if score >= 90:
+                    return "优秀 - 几乎无需修改"
+                elif score >= 75:
+                    return "良好 - 有小幅优化空间"
+                elif score >= 60:
+                    return "一般 - 存在明显不足"
+                elif score >= 40:
+                    return "较差 - 需要大幅修改"
+                else:
+                    return "很差 - 建议重写"
+
+
+            def get_score_bar(score):
+                if not isinstance(score, (int, float)):
+                    return "—"
+                if score >= 90:
+                    return "🟢🟢🟢🟢🟢"
+                elif score >= 75:
+                    return "🟢🟢🟢🟢⚪"
+                elif score >= 60:
+                    return "🟡🟡🟡⚪⚪"
+                elif score >= 40:
+                    return "🟠🟠⚪⚪⚪"
+                else:
+                    return "🔴⚪⚪⚪⚪"
+          code_language: python3
+          dependencies: []
+          outputs:
+            report:
+              children: null
+              type: string
+          title: 报告格式化
+          type: code
+          variables:
+            - value_selector:
+                - cv_analysis_llm
+                - text
+              variable: llm_output
+        height: 102
+        id: report_formatter
+        position:
+          x: 992
+          y: 282
+        positionAbsolute:
+          x: 992
+          y: 282
+        type: custom
+        width: 244
+
+      - data:
+          outputs:
+            - value_selector:
+                - report_formatter
+                - report
+              variable: report
+          title: 输出报告
+          type: end
+        height: 90
+        id: end
+        position:
+          x: 1296
+          y: 282
+        positionAbsolute:
+          x: 1296
+          y: 282
+        type: custom
+        width: 244
+
+      - data:
+          outputs:
+            - value_selector:
+                - input_validation
+                - error_message
+              variable: error_message
+          title: 错误输出
+          type: end
+        height: 90
+        id: error_end
+        position:
+          x: 688
+          y: 482
+        positionAbsolute:
+          x: 688
+          y: 482
+        type: custom
+        width: 244
+
+    viewport:
+      x: 0
+      y: 0
+      zoom: 1
